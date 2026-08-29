@@ -45,7 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--shot-seasons", nargs="+", metavar="YYYY-YY",
-        help="Seasons to pull shot-level data for. Defaults to the last four.",
+        help=(
+            "Seasons to pull shot-level data for. Defaults to the last four. "
+            "These cost one request per match, so each season takes roughly 40 "
+            "minutes at the six-second rate limit."
+        ),
+    )
+    parser.add_argument(
+        "--player-match-seasons", nargs="+", metavar="YYYY-YY",
+        help=(
+            "Seasons to pull player match logs for. Defaults to the same window "
+            "as --shot-seasons, which shares their cached match files."
+        ),
     )
     parser.add_argument(
         "--browser",
@@ -68,9 +79,17 @@ def main(argv: list[str] | None = None) -> int:
         [season_start_year(label) for label in arguments.shot_seasons]
         if arguments.shot_seasons else None
     )
+    player_match_years = (
+        [season_start_year(label) for label in arguments.player_match_seasons]
+        if arguments.player_match_seasons else None
+    )
 
     if not arguments.reconcile_only and not arguments.skip_understat:
-        understat.build_all(start_years=requested, shot_years=shot_years)
+        understat.build_all(
+            start_years=requested,
+            shot_years=shot_years,
+            player_match_years=player_match_years,
+        )
 
     if not arguments.reconcile_only and not arguments.skip_fbref:
         try:

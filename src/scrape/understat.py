@@ -79,8 +79,20 @@ LEAGUE = "ENG-Premier League"
 #: project uses 2014/15 as its horizon.
 FIRST_SEASON_START_YEAR = 2014
 
-#: Shot-level data is bulky, so by default we only keep recent seasons: the
-#: three most recently completed, plus the one in progress.
+#: How many recent seasons the per-match tables cover by default: the three most
+#: recently completed, plus the one in progress.
+#:
+#: This default exists because the per-match tables (shots and player match logs)
+#: cost **one request per match**. A season is ~380 requests, so at the six-second
+#: minimum a single season takes about 40 minutes and all thirteen would take
+#: most of a day of continuous scraping. The models that use these tables - the
+#: goalscorer model above all - care about current form, not who was taking shots
+#: in 2015, so fetching the lot would be a lot of load on a free site for data we
+#: would not use.
+#:
+#: Both are still a parameter. To backfill the whole history, pass explicit years
+#: (``build_all(shot_years=available_start_years())``) and leave it running: the
+#: job is resumable and cached, so it can be stopped and restarted freely.
 DEFAULT_SHOT_SEASONS = 4
 
 #: Understat timestamps are UK local time, like football-data's.
@@ -525,6 +537,7 @@ def build_all(
     *,
     start_years: list[int] | None = None,
     shot_years: list[int] | None = None,
+    player_match_years: list[int] | None = None,
     cache_dir: Path | str = CACHE_DIR,
     staging_dir: Path | str = STAGING_DIR,
     checkpoint_path: Path | str = CHECKPOINT_PATH,
@@ -533,18 +546,40 @@ def build_all(
 ) -> dict[str, Path]:
     """Pull every Understat table and write the processed parquets.
 
+    ``start_years`` covers the cheap season-level tables (one request each) and
+    defaults to the full 2014/15-to-now history. ``shot_years`` and
+    ``player_match_years`` cover the expensive per-match tables and default to
+    the recent window - see :data:`DEFAULT_SHOT_SEASONS` for why.
+
+    Tables are built cheapest-first, so an interrupted run has already produced
+    the season-level tables before it starts the slow per-match ones. Shots and
+    player match logs come from the same cached match files, so whichever runs
+    first pays for both.
+
     Returns ``{table name: parquet path}``.
     """
     start_years = start_years if start_years is not None else available_start_years(today)
     shot_years = shot_years if shot_years is not None else shot_start_years(today)
+    player_match_years = (
+        player_match_years if player_match_years is not None else shot_years
+    )
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
 
+    years_for_table = {
+        "team_match": start_years,
+        "player_season": start_years,
+        "shots": shot_years,
+        "player_match": player_match_years,
+    }
+    # Cheapest first: one request per season, then one request per match.
+    order = ("team_match", "player_season", "shots", "player_match")
+
     written: dict[str, Path] = {}
-    for table, (_, _, default_path) in TABLES.items():
-        years = shot_years if table == "shots" else start_years
+    for table in order:
+        _, _, default_path = TABLES[table]
         frame = collect(
-            table, years,
+            table, years_for_table[table],
             cache_dir=cache_dir, staging_dir=staging_dir, checkpoint_path=checkpoint_path,
         )
         if frame.empty:
