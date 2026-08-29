@@ -85,6 +85,26 @@ set `PREMFORECASTER_BROWSER` to the browser binary. If FBref is unreachable the
 pipeline logs it and carries on — Understat is what supplies the xG the model
 actually depends on.
 
+## Building the context tables
+
+```bash
+python -m pipelines.build_context                # Elo, FPL, weather, referees
+python -m pipelines.build_context --only fpl     # just the availability snapshot
+```
+
+Writes `elo_history.parquet`, `fpl_players.parquet`, `fpl_fixtures.parquet`,
+`match_weather.parquet` and `referee_profiles.parquet`. Sources are independent,
+so one being unreachable does not stop the others.
+
+**Run the FPL step often.** It snapshots who is injured or doubtful *right now*,
+and that is the only way the history is ever recorded — the API cannot tell you
+who was injured last month, so a snapshot you don't take is lost for good. The
+players table is append-only; the others can be rebuilt any time.
+
+Weather batches by stadium and year (every club plays 19 home games at one
+ground), so the whole 2014/15-onwards history costs about 300 requests rather
+than 4,570, and reruns are served from cache.
+
 ## Things worth knowing
 
 - **All joins go through `data/lookups/team_names.csv`.** Every source spells
@@ -102,7 +122,8 @@ actually depends on.
 - ✅ Repo scaffolding, lookup tables
 - ✅ football-data.co.uk results and closing odds → `results.parquet`
 - ✅ Understat xG (team, player, shot level) + reconciliation report
-- ⚠️ FBref scraper written and tested, but blocked by Cloudflare in the
-  environment it was built in — see `data/lookups/NOTES.md`
-- ⬜ Club Elo, FPL, weather, referees
+- ✅ FPL availability snapshots, match weather (100% of matches), referee profiles
+- ⚠️ FBref and Club Elo scrapers written and tested, but both blocked by the
+  network in the environment they were built in — see `data/lookups/NOTES.md`
+  for what to run to verify them
 - ⬜ Dixon-Coles model, goalscorer model, back-test, Google Sheets export

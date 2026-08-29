@@ -53,6 +53,36 @@ Spurs, Sunderland.
    **Hill Dickinson Stadium** at Bramley-Moore Dock. The coordinates in
    `stadiums.csv` (53.3906, -3.0023) are approximate and should be checked.
 
+## Club Elo could not be reached (2026-08-29)
+
+`api.clubelo.com` was unreachable from the automated environment, in two
+separate sessions and by three routes: `curl` over HTTP and HTTPS, and Python
+`requests` (read timeout on port 80, connection reset on 443). Like FBref, this
+looks like a network restriction rather than the site being down — it serves
+plain CSV and needs no key.
+
+So `elo_history.parquet` has **not** been built, and `clubelo_name` in
+team_names.csv stays partly unverified: 17 of the 36 clubs were confirmed
+against clubelo.com/ENG earlier, and the rest are from memory. The scraper
+raises `UnknownTeamError` on any name it cannot map, so a bad one will announce
+itself on the first successful run.
+
+`src/scrape/clubelo.py` is written offline-first for this reason: every parsing
+and lookup function works on data already on disk and is tested with no network
+at all. Only `fetch_club_history` touches the internet, and `build_elo_history`
+rebuilds the parquet from cached CSVs without a single request. **The download
+path itself is the one part not verified against the live API.**
+
+To verify from your machine:
+
+```bash
+python -m pipelines.build_context --only clubelo
+python -c "from src.scrape.clubelo import get_elo; print(get_elo('Arsenal', '2023-01-01'))"
+```
+
+A Premier League club should come back somewhere between about 1300 and 2100;
+Arsenal in January 2023, top of the league, should be near the upper end.
+
 ## FBref could not be reached (2026-08-29)
 
 FBref sits behind Cloudflare. From the automated environment this project was
