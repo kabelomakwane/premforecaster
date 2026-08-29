@@ -1,0 +1,106 @@
+# Are Club Elo and FBref reachable from here?
+#
+# Both were blocked from the environment this project was developed in. Neither
+# failure looked like a fault in the scrapers - Club Elo never answered at all,
+# and FBref returned a Cloudflare challenge to every kind of client - but that
+# is a guess until it is tried from a different network. A GitHub runner is a
+# different network.
+#
+# Manual only. There is deliberately no schedule: this exists to answer a
+# question, not to poll anyone's website. It makes a handful of requests - one
+# club from Club Elo, one season's schedule from FBref - and reports PASS or
+# FAIL for each on the job summary page.
+#
+# Run it from the Actions tab: "Check blocked sources" -> "Run workflow".
+
+name: Check blocked sources
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "Season start year for the FBref probe (2024 = 2024/25)"
+        required: false
+        default: "2024"
+      sources:
+        description: "Which sources to probe"
+        required: false
+        default: "both"
+        type: choice
+        options:
+          - both
+          - clubelo
+          - fbref
+
+# Read-only: this job downloads a couple of files and reports. It never writes
+# to the repository.
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe Club Elo and FBref
+    runs-on: ubuntu-latest
+    # Generous but bounded: FBref drives a real browser through a Cloudflare
+    # challenge, which is slow. If it hangs, the job should end, not sit there.
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Find a browser for FBref's Cloudflare challenge
+        id: browser
+        run: |
+          # ubuntu-latest ships Google Chrome. Fall back to Chromium if the
+          # image ever changes, and carry on either way - the script reports a
+          # missing browser as a FAIL for FBref rather than crashing.
+          for candidate in \
+            "$(command -v google-chrome || true)" \
+            "$(command -v google-chrome-stable || true)" \
+            "$(command -v chromium || true)" \
+            "$(command -v chromium-browser || true)"; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+              echo "Using browser: $candidate"
+              echo "PREMFORECASTER_BROWSER=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "No Chrome or Chromium found on this runner."
+
+      - name: Probe the sources
+        id: probe
+        # The script writes PASS/FAIL to the job summary itself. It exits 0 even
+        # when a source is blocked, because a blocked source is the finding we
+        # are looking for, not a broken job. Only an unexpected crash fails here.
+        run: |
+          case "${{ inputs.sources }}" in
+            clubelo) ONLY="--only clubelo" ;;
+            fbref)   ONLY="--only fbref" ;;
+            *)       ONLY="" ;;
+          esac
+          python -m pipelines.check_sources \
+            --output-dir source-check \
+            --season "${{ inputs.season }}" \
+            $ONLY
+
+      - name: Upload the results
+        # Always, so a failed probe still hands over its downloads and traceback.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-check-${{ github.run_id }}
+          path: source-check/
+          if-no-files-found: warn
+          retention-days: 14
