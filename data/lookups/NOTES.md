@@ -13,8 +13,8 @@ horizon). That is 36 clubs.
 |---|---|
 | `fpl_name` | **Verified** for the 20 current clubs against the live FPL API (`fantasy.premierleague.com/api/bootstrap-static/`, fetched 2026-08-29). Historic clubs are from memory — see below. |
 | `clubelo_name` | **Verified** for 17 clubs against the live Club Elo site (`clubelo.com/ENG`, English level 1). The rest are from memory. |
-| `fbref_name` | **Not verified** — no request made. FBref is rate limited to 1 request / 7 seconds, so we should confirm these when the FBref scraper first runs. |
-| `understat_name` | **Not verified** — the Understat page did not return its embedded team JSON when fetched. Confirm on the first Understat pull. |
+| `fbref_name` | **Still not verified.** FBref is behind Cloudflare and could not be reached to check (see below), so this column remains from memory. Confirm on the first successful FBref pull — the scraper raises on any unmapped name, so it will tell you. |
+| `understat_name` | **Verified** for 2014/15–2026/27 on 2026-08-29 via the first full `soccerdata` pull. All 13 seasons map with nothing unmapped and nothing spare, which confirms the short forms (`Leicester`, `Ipswich`, `Brighton`, `Hull`) and the long ones (`Wolverhampton Wanderers`, `Nottingham Forest`, `Queens Park Rangers`). |
 | `footballdata_name` | **Verified** against all 13 season CSVs (2014/15–2026/27) on 2026-08-29. Every `HomeTeam`/`AwayTeam` value in every file maps to a canonical name, and every name in this column is actually used. Nothing missing, nothing spare. |
 
 Verified Club Elo names: Arsenal, Man City, Liverpool, Aston Villa, Chelsea,
@@ -34,12 +34,12 @@ Spurs, Sunderland.
    `understat_name` = `Coventry` is still a guess based on how Understat
    shortens other names, and `clubelo_name` is also unconfirmed. Check both on
    the first scrape of the new season.
-2. **Understat short names generally** — Understat abbreviates some clubs
-   (`Leeds`, `Hull`, `Cardiff`, `Norwich`, `Stoke`, `Swansea`, `Luton`,
-   `Leicester`, `Huddersfield`, `Ipswich`) but writes others out in full
-   (`Wolverhampton Wanderers`, `West Bromwich Albion`, `Queens Park Rangers`,
-   `Newcastle United`, `Manchester United`). I am confident about the full-form
-   ones and less confident about the short ones. Verify the whole column.
+2. ~~**Understat short names generally**~~ — resolved. The full pull confirmed
+   every name across all 13 seasons: Understat abbreviates some clubs (`Leeds`,
+   `Hull`, `Cardiff`, `Norwich`, `Stoke`, `Swansea`, `Luton`, `Leicester`,
+   `Huddersfield`, `Ipswich`) and writes others out in full (`Wolverhampton
+   Wanderers`, `West Bromwich Albion`, `Queens Park Rangers`, `Newcastle
+   United`, `Manchester United`), exactly as recorded.
 3. **Nottingham Forest** — five different spellings across five sources
    (`Nott'ham Forest`, `Nottingham Forest`, `Nott'm Forest`, `Forest`,
    `Nott'm Forest`). The Club Elo `Forest` and the FPL `Nott'm Forest` are
@@ -52,6 +52,23 @@ Spurs, Sunderland.
 5. **Everton's stadium** — Everton left Goodison Park and now play at the
    **Hill Dickinson Stadium** at Bramley-Moore Dock. The coordinates in
    `stadiums.csv` (53.3906, -3.0023) are approximate and should be checked.
+
+## FBref could not be reached (2026-08-29)
+
+FBref sits behind Cloudflare. From the automated environment this project was
+built in, every route was blocked:
+
+- a plain HTTPS request returns a Cloudflare `403` challenge page;
+- so does a request with a spoofed TLS fingerprint (the trick `soccerdata` uses
+  successfully for Understat);
+- the real-browser fallback `soccerdata` falls back to had its connections cut
+  by the network before any page loaded.
+
+This looks like an environment restriction rather than anything wrong with the
+scraper, which is written, tested and cache-first. On a normal machine with
+Chrome or Chromium installed it should work; if it does not, point
+`PREMFORECASTER_BROWSER` at the browser binary. Understat supplies the xG the
+model actually depends on, so the pipeline is built to carry on without FBref.
 
 ## A structural gap to fix later
 

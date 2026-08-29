@@ -52,6 +52,30 @@ best available closing odds and de-margined market probabilities.
 Neither directory is in git, so run this once after cloning. Add `--no-download`
 to rebuild from the raw files already on disk.
 
+## Building the xG tables
+
+```bash
+python -m pipelines.build_xg                 # Understat + FBref + reconciliation
+python -m pipelines.build_xg --skip-fbref    # Understat only, much quicker
+```
+
+Writes `team_match_xg.parquet`, `player_season.parquet`,
+`understat_player_match.parquet`, `shots.parquet`, and (when FBref is
+reachable) `fbref_team_match.parquet` and `fbref_player_match.parquet`. It
+finishes by writing `reconciliation_report.csv`, which lists any match that is
+in `results.parquet` but missing from an xG table, or the other way round.
+
+Both scrapers are **cache-first and resumable**. Every downloaded page is cached
+under `data/raw/<source>/`, and each season is staged to parquet and recorded in
+a checkpoint as soon as it parses — so an interrupted run resumes where it
+stopped, and a rerun makes no network requests at all.
+
+**FBref needs a browser.** It sits behind Cloudflare, which rejects ordinary HTTP
+clients, so `soccerdata` drives a real Chrome/Chromium. If it cannot find one,
+set `PREMFORECASTER_BROWSER` to the browser binary. If FBref is unreachable the
+pipeline logs it and carries on — Understat is what supplies the xG the model
+actually depends on.
+
 ## Things worth knowing
 
 - **All joins go through `data/lookups/team_names.csv`.** Every source spells
@@ -68,5 +92,8 @@ to rebuild from the raw files already on disk.
 
 - ✅ Repo scaffolding, lookup tables
 - ✅ football-data.co.uk results and closing odds → `results.parquet`
-- ⬜ FBref / Understat xG, Club Elo, FPL, weather, referees
+- ✅ Understat xG (team, player, shot level) + reconciliation report
+- ⚠️ FBref scraper written and tested, but blocked by Cloudflare in the
+  environment it was built in — see `data/lookups/NOTES.md`
+- ⬜ Club Elo, FPL, weather, referees
 - ⬜ Dixon-Coles model, goalscorer model, back-test, Google Sheets export
