@@ -68,7 +68,16 @@ in `results.parquet` but missing from an xG table, or the other way round.
 Both scrapers are **cache-first and resumable**. Every downloaded page is cached
 under `data/raw/<source>/`, and each season is staged to parquet and recorded in
 a checkpoint as soon as it parses — so an interrupted run resumes where it
-stopped, and a rerun makes no network requests at all.
+stopped, and a rerun makes **zero** network requests (measured: a full rebuild of
+the team xG table over a warm checkpoint issues none). Delete the checkpoint and
+it still serves all the data from the page cache, at the cost of one
+cookie-priming request per season.
+
+**The per-match tables are slow.** Shots and player match logs need one request
+per match, so at the six-second Understat minimum a single season takes about 40
+minutes. They default to the last three completed seasons plus the current one.
+To go further back, pass `--shot-seasons`/`--player-match-seasons` and leave it
+running; it is resumable, so you can stop and restart it freely.
 
 **FBref needs a browser.** It sits behind Cloudflare, which rejects ordinary HTTP
 clients, so `soccerdata` drives a real Chrome/Chromium. If it cannot find one,
