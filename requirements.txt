@@ -1,0 +1,24 @@
+# Premier League forecasting model - Python 3.11+
+# Major versions are pinned; minor/patch upgrades are allowed.
+
+# --- Modelling core ---------------------------------------------------------
+penaltyblog>=1.2,<2        # Dixon-Coles / time-decayed Poisson goal models
+scipy>=1.13,<2             # optimisation + statistical distributions
+numpy>=1.26,<3
+pandas>=2.2,<3
+
+# --- Data collection --------------------------------------------------------
+soccerdata>=1.8,<2         # FBref + Understat scrapers (rate limited, cached)
+requests>=2.32,<3          # Club Elo, FPL, Open-Meteo, football-data.co.uk
+
+# --- Storage ----------------------------------------------------------------
+pyarrow>=16.1,<22          # parquet read/write
+
+# --- Export to Google Sheets ------------------------------------------------
+gspread>=6.1,<7
+gspread-dataframe>=4.0,<5
+google-auth>=2.30,<3
+
+# --- Testing and diagnostics ------------------------------------------------
+pytest>=8.2,<9
+matplotlib>=3.9,<4

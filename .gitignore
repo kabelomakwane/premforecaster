@@ -1,0 +1,47 @@
+# --- Data -------------------------------------------------------------------
+# Raw and processed data are rebuildable from the scrapers, so they stay out of
+# git. data/lookups/ IS version controlled: it is hand-maintained reference data.
+data/raw/**
+!data/raw/**/
+!data/raw/**/.gitkeep
+data/processed/**
+!data/processed/**/
+!data/processed/**/.gitkeep
+
+# --- Credentials (never commit these) ---------------------------------------
+credentials/
+secrets/
+*.pem
+*.key
+service_account.json
+*service-account*.json
+gcp-*.json
+.env
+.env.*
+!.env.example
+
+# --- Caches -----------------------------------------------------------------
+.cache/
+data/cache/
+.soccerdata/
+soccerdata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# --- Virtual environments ---------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Editors / OS -----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Notebooks / plots ------------------------------------------------------
+.ipynb_checkpoints/
+*.egg-info/
