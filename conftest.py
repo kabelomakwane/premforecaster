@@ -1,0 +1,12 @@
+"""Makes the repo root importable so tests can ``import src...``.
+
+Without this, running pytest from a different directory would fail to find the
+``src`` package. Nothing else belongs in here.
+"""
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))

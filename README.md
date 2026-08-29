@@ -38,6 +38,20 @@ pipelines/      scripts that chain the above together
 tests/          pytest tests
 ```
 
+## Building the results table
+
+```bash
+python -m pipelines.build_results
+```
+
+Downloads every Premier League season CSV from football-data.co.uk (2014/15 to
+now) into `data/raw/footballdata/`, then writes one tidy row per match to
+`data/processed/results.parquet` — canonical team names, UTC kick-off times,
+best available closing odds and de-margined market probabilities.
+
+Neither directory is in git, so run this once after cloning. Add `--no-download`
+to rebuild from the raw files already on disk.
+
 ## Things worth knowing
 
 - **All joins go through `data/lookups/team_names.csv`.** Every source spells
@@ -52,4 +66,7 @@ tests/          pytest tests
 
 ## Status
 
-Project scaffolding only — data sources, models and pipelines are not built yet.
+- ✅ Repo scaffolding, lookup tables
+- ✅ football-data.co.uk results and closing odds → `results.parquet`
+- ⬜ FBref / Understat xG, Club Elo, FPL, weather, referees
+- ⬜ Dixon-Coles model, goalscorer model, back-test, Google Sheets export

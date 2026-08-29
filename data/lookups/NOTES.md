@@ -15,7 +15,7 @@ horizon). That is 36 clubs.
 | `clubelo_name` | **Verified** for 17 clubs against the live Club Elo site (`clubelo.com/ENG`, English level 1). The rest are from memory. |
 | `fbref_name` | **Not verified** — no request made. FBref is rate limited to 1 request / 7 seconds, so we should confirm these when the FBref scraper first runs. |
 | `understat_name` | **Not verified** — the Understat page did not return its embedded team JSON when fetched. Confirm on the first Understat pull. |
-| `footballdata_name` | **Not verified** — these are the `HomeTeam`/`AwayTeam` values in the E0 season CSVs, from memory. Easy to confirm: download one season CSV and list the unique values. |
+| `footballdata_name` | **Verified** against all 13 season CSVs (2014/15–2026/27) on 2026-08-29. Every `HomeTeam`/`AwayTeam` value in every file maps to a canonical name, and every name in this column is actually used. Nothing missing, nothing spare. |
 
 Verified Club Elo names: Arsenal, Man City, Liverpool, Aston Villa, Chelsea,
 Man United, Newcastle, Brighton, Bournemouth, Crystal Palace, Everton,
@@ -29,10 +29,11 @@ Spurs, Sunderland.
 ## Specific rows to check — TODO
 
 1. **Coventry City** — newly promoted, and it has not been in the Premier League
-   since 1999/2000. That means Understat has no historic EPL entry for it at
-   all, so `understat_name` = `Coventry` is a guess based on how Understat
-   shortens other names. `clubelo_name` and `footballdata_name` are also
-   guesses. Check all three on the first scrape of the new season.
+   since 1999/2000. `footballdata_name` = `Coventry` is now confirmed from the
+   2026/27 CSV. Understat has no historic EPL entry for the club at all, so
+   `understat_name` = `Coventry` is still a guess based on how Understat
+   shortens other names, and `clubelo_name` is also unconfirmed. Check both on
+   the first scrape of the new season.
 2. **Understat short names generally** — Understat abbreviates some clubs
    (`Leeds`, `Hull`, `Cardiff`, `Norwich`, `Stoke`, `Swansea`, `Luton`,
    `Leicester`, `Huddersfield`, `Ipswich`) but writes others out in full
