@@ -533,6 +533,28 @@ def collect(
     return pd.concat(frames, ignore_index=True)
 
 
+def already_staged_years(
+    table: str,
+    *,
+    staging_dir: Path | str = STAGING_DIR,
+    checkpoint_path: Path | str = CHECKPOINT_PATH,
+) -> list[int]:
+    """Seasons of a table we have already fetched and parsed.
+
+    Used to widen the per-match tables for free. Those default to a recent
+    window because each season costs hundreds of requests - but a season we
+    downloaded on an earlier run costs nothing to include, and throwing it away
+    would mean having scraped it for nothing.
+    """
+    checkpoint = Checkpoint(checkpoint_path)
+    years = []
+    for start_year in available_start_years():
+        key = f"{table}/{season_label(start_year)}"
+        if checkpoint.is_done(key) and staged_path(table, start_year, staging_dir).exists():
+            years.append(start_year)
+    return years
+
+
 def build_all(
     *,
     start_years: list[int] | None = None,
@@ -566,11 +588,26 @@ def build_all(
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
 
+    # Seasons of the per-match tables we already hold cost nothing to include,
+    # so fold them in rather than discarding data we have already fetched.
+    def widen(table: str, requested: list[int]) -> list[int]:
+        free = already_staged_years(
+            table, staging_dir=staging_dir, checkpoint_path=checkpoint_path
+        )
+        extra = sorted(set(free) - set(requested))
+        if extra:
+            logger.info(
+                "Understat %s: also including %d already-downloaded season(s) "
+                "at no request cost: %s",
+                table, len(extra), ", ".join(season_label(y) for y in extra),
+            )
+        return sorted(set(requested) | set(free))
+
     years_for_table = {
         "team_match": start_years,
         "player_season": start_years,
-        "shots": shot_years,
-        "player_match": player_match_years,
+        "shots": widen("shots", shot_years),
+        "player_match": widen("player_match", player_match_years),
     }
     # Cheapest first: one request per season, then one request per match.
     order = ("team_match", "player_season", "shots", "player_match")
