@@ -1,0 +1,80 @@
+# Run the test suite on every push and pull request.
+#
+# The suite is deliberately hermetic: it makes no network requests and needs no
+# scraped data. Everything that depends on downloaded files - the checks against
+# results.parquet, the xG tables, the reconciliation report - skips itself when
+# those files are absent, which is always the case here because data/ is not in
+# version control. So a green run means "the code is sound", not "the data is
+# built"; the data checks only run on a machine that has actually built it.
+#
+# Nothing in here scrapes anything. The workflow that talks to the outside world
+# is check-sources.yml, and that one is manual only.
+
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch makes the previous run irrelevant, so stop it
+# rather than paying for both.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the version the project targets and is developed against.
+        python-version: ["3.11"]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Show what is installed
+        run: |
+          python --version
+          pip list | grep -Ei "penaltyblog|soccerdata|pandas|numpy|pyarrow|pytest"
+
+      - name: Run the test suite
+        # -rs lists why each test skipped, in the same run rather than a second
+        # one. On a fresh checkout the skips should all be "data not built",
+        # which is the expected state here and worth seeing rather than hiding.
+        run: pytest -q -rs --durations=10 | tee pytest-output.txt
+
+      - name: Summarise the result
+        if: always()
+        run: |
+          {
+            echo "## Test suite"
+            echo
+            echo '```'
+            tail -25 pytest-output.txt
+            echo '```'
+            echo
+            echo "Data-dependent tests skip on a fresh checkout because \`data/\` is"
+            echo "not in version control. A green run means the code is sound; the"
+            echo "checks against built data run on a machine that has built it."
+          } >> "$GITHUB_STEP_SUMMARY"
