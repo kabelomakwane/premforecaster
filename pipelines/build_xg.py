@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import reconcile
+from src import reconcile, validate
 from src.scrape import fbref, understat
 from src.scrape.footballdata import season_start_year
 
@@ -96,6 +96,20 @@ def main(argv: list[str] | None = None) -> int:
             fbref.build_all(start_years=requested, browser=arguments.browser)
         except fbref.FBrefUnavailableError as error:
             log.warning("FBref unavailable, carrying on without it: %s", error)
+
+    # --- Season-axis guard -------------------------------------------------
+    # Run before reconciliation: a table with a season missing from the middle
+    # is broken in a way that would quietly distort the model, and there is no
+    # point reconciling it until that is fixed.
+    try:
+        allowed = validate.validate_processed_tables(understat.PROCESSED_DIR)
+    except validate.SeasonAxisError as error:
+        log.error("Season-axis check failed:\n%s", error)
+        return 1
+
+    for table, gaps in allowed.items():
+        if gaps:
+            log.info("%s: %d declared gap(s) accepted: %s", table, len(gaps), ", ".join(gaps))
 
     # --- Reconciliation ----------------------------------------------------
     results_path = reconcile.RESULTS_PARQUET
