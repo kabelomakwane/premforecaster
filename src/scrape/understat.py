@@ -25,12 +25,20 @@ Four tables are pulled:
 
 Politeness and cost
 -------------------
-``soccerdata`` rate limits Understat to no faster than one request every six
-seconds and caches every response on disk, under ``data/raw/understat/``. That
-cache is the point: a second run costs zero requests. On top of it, each season
-of each table is written to a staging parquet as soon as it is parsed and
-recorded in a checkpoint file, so a run interrupted after nine of thirteen
-seasons resumes at the tenth rather than starting again.
+**``soccerdata`` does not rate limit Understat.** Its ``Understat`` class leaves
+``rate_limit`` at zero and sends no User-Agent, so straight out of the box it
+will fetch as fast as the network allows - and the player and shot tables are
+one request *per match*, so a single season is nearly 400 requests. This module
+therefore sets the limit itself, in :func:`make_client`: at least
+``REQUEST_INTERVAL_SECONDS`` between requests plus random jitter, and a
+descriptive User-Agent, as CLAUDE.md requires. Do not remove that; it is the
+difference between a polite scraper and hammering someone's free website.
+
+Every response is cached on disk under ``data/raw/understat/``, and that cache
+is the point: a second run costs zero requests. On top of it, each season of
+each table is written to a staging parquet as soon as it is parsed and recorded
+in a checkpoint file, so a run interrupted after nine of thirteen seasons
+resumes at the tenth rather than starting again.
 
 All team names come back as Understat spells them and are translated to
 canonical names before anything is written, so these tables join cleanly to
@@ -78,6 +86,19 @@ DEFAULT_SHOT_SEASONS = 4
 #: Understat timestamps are UK local time, like football-data's.
 SOURCE_TIMEZONE = "Europe/London"
 
+#: Minimum seconds between requests. CLAUDE.md sets this at six for Understat
+#: and calls it non-negotiable. soccerdata does not enforce it, so we do.
+REQUEST_INTERVAL_SECONDS = 6.0
+
+#: Extra random delay on top, so requests are not perfectly periodic.
+REQUEST_JITTER_SECONDS = 2.0
+
+#: Who we are. A scraper with no User-Agent is impolite and unblockable-by-
+#: request; this one says what it is and that it is personal and non-commercial.
+USER_AGENT = (
+    "premforecaster/0.1 (personal, non-commercial football forecasting project)"
+)
+
 
 class UnderstatFormatError(ValueError):
     """Raised when Understat returns something we do not recognise."""
@@ -116,20 +137,103 @@ def _soccerdata_season(start_year: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def make_client(start_year: int, cache_dir: Path | str = CACHE_DIR):
-    """Build a soccerdata Understat reader for one season.
+def make_client(
+    start_year: int,
+    cache_dir: Path | str = CACHE_DIR,
+    *,
+    rate_limit: float = REQUEST_INTERVAL_SECONDS,
+    jitter: float = REQUEST_JITTER_SECONDS,
+):
+    """Build a soccerdata Understat reader for one season, politely configured.
 
-    Imported lazily so that merely importing this module does not pull in
-    soccerdata (which is slow) or touch the network.
+    soccerdata is imported lazily so that merely importing this module does not
+    pull it in (it is slow) or touch the network.
+
+    The rate limit and User-Agent are applied here because soccerdata's Understat
+    class sets neither: it ships with ``rate_limit = 0`` and no headers. The
+    attributes below are what its request loop actually reads, so setting them
+    after construction is what makes the limit take effect.
     """
     import soccerdata
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    return soccerdata.Understat(
+    client = soccerdata.Understat(
         leagues=LEAGUE,
         seasons=_soccerdata_season(start_year),
         data_dir=Path(cache_dir),
     )
+
+    # soccerdata's own rate limit, for the code paths that honour it.
+    client.rate_limit = rate_limit
+    client.max_delay = jitter
+
+    # Understat's data calls do not go through that path, so throttle them too.
+    throttle(client, rate_limit=rate_limit, jitter=jitter)
+
+    # Understat's requests pass their own header dict, which overrides anything
+    # set on the session, so the User-Agent has to be added to that dict.
+    soccerdata.understat.UNDERSTAT_HEADERS.setdefault("User-Agent", USER_AGENT)
+
+    return client
+
+
+def throttle(client, *, rate_limit: float, jitter: float) -> None:
+    """Force a minimum gap between Understat's *network* requests.
+
+    Necessary because ``soccerdata``'s Understat reader fetches through its own
+    ``_request_api`` method, which calls the HTTP session directly and never
+    sleeps - the rate limit on the class is simply not consulted on that path.
+    Setting ``rate_limit`` alone therefore does nothing, which is easy to
+    believe you have fixed when you have not. Measure it if you change this.
+
+    The throttle wraps the HTTP session's ``get`` rather than any one reader
+    method, so it covers *every* request the client makes - the data calls, and
+    the separate call that primes Understat's cookies, which happens outside
+    ``_request_api`` and would otherwise slip through.
+
+    Wrapping at this level also keeps cache hits instant for free: a cached read
+    returns before it ever reaches the session, so a rerun over a warm cache
+    never sleeps.
+    """
+    import random
+    import time
+
+    session = client._session
+    original_get = session.get
+    last_request = [0.0]
+
+    def polite_get(*args, **kwargs):
+        target = rate_limit + random.random() * jitter
+        waited = time.monotonic() - last_request[0]
+        if waited < target:
+            time.sleep(target - waited)
+        last_request[0] = time.monotonic()
+        return original_get(*args, **kwargs)
+
+    session.get = polite_get
+    client._premforecaster_throttled = True
+
+
+def check_politeness(client) -> None:
+    """Assert a client really will wait between requests.
+
+    Checks both the attribute and that the throttle was actually installed. A
+    silent regression here - a soccerdata upgrade renaming a method, say - would
+    turn this into an impolite scraper without anyone noticing.
+    """
+    rate = getattr(client, "rate_limit", 0)
+    if not rate or rate < REQUEST_INTERVAL_SECONDS:
+        raise RuntimeError(
+            f"Understat client is set to {rate}s between requests, below the "
+            f"{REQUEST_INTERVAL_SECONDS}s minimum this project holds itself to. "
+            "Refusing to scrape. soccerdata may have renamed the attribute."
+        )
+    if not getattr(client, "_premforecaster_throttled", False):
+        raise RuntimeError(
+            "Understat client has no throttle installed on its request method, "
+            "so it would fetch as fast as the network allows. Refusing to "
+            "scrape. Build clients with make_client()."
+        )
 
 
 def check_season_matches(raw: pd.DataFrame, start_year: int, table: str) -> None:
@@ -362,6 +466,7 @@ def fetch_season(
     """Fetch and parse one season of one table, writing it to staging."""
     reader_name, parser, _ = TABLES[table]
     client = make_client(start_year, cache_dir)
+    check_politeness(client)
     raw = getattr(client, reader_name)()
 
     if raw.empty:

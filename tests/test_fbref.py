@@ -46,6 +46,40 @@ def test_fbref_horizon_starts_at_2017_18():
 
 
 # ---------------------------------------------------------------------------
+# Scraping politeness (the seven-second limit is a hard rule in CLAUDE.md)
+# ---------------------------------------------------------------------------
+
+
+class FakeClient:
+    def __init__(self, rate_limit=0, max_delay=0):
+        self.rate_limit = rate_limit
+        self.max_delay = max_delay
+
+
+def test_the_fbref_interval_is_at_least_seven_seconds():
+    assert fb.REQUEST_INTERVAL_SECONDS >= 7.0
+
+
+def test_the_user_agent_says_who_we_are():
+    assert "premforecaster" in fb.USER_AGENT.lower()
+
+
+def test_an_unthrottled_client_is_refused():
+    """soccerdata ships with rate_limit = 0; accepting that would hammer FBref."""
+    with pytest.raises(RuntimeError, match="Refusing to scrape"):
+        fb.check_politeness(FakeClient(rate_limit=0))
+
+
+def test_a_client_below_the_hard_limit_is_refused():
+    with pytest.raises(RuntimeError, match="hard limit"):
+        fb.check_politeness(FakeClient(rate_limit=3.0))
+
+
+def test_a_properly_throttled_client_is_accepted():
+    fb.check_politeness(FakeClient(rate_limit=fb.REQUEST_INTERVAL_SECONDS))
+
+
+# ---------------------------------------------------------------------------
 # Column flattening
 # ---------------------------------------------------------------------------
 

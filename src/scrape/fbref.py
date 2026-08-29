@@ -16,11 +16,12 @@ Two tables are produced:
 
 Politeness is not optional here
 -------------------------------
-FBref's terms ask for no more than one request every three seconds; this project
-holds itself to **one request every seven seconds**, which is the limit written
-into CLAUDE.md and enforced by ``soccerdata``'s rate limiter. A full pull is
-therefore slow - several stat groups times several seasons, each a separate
-request - and that is the price of scraping someone else's site politely.
+This project holds itself to **one request every seven seconds** for FBref, the
+limit written into CLAUDE.md. Do not assume ``soccerdata`` enforces that: its
+readers ship with ``rate_limit = 0``, so the limit is applied here in
+:func:`make_client` and checked before every fetch. A full pull is therefore
+slow - several stat groups times several seasons, each a separate request - and
+that is the price of scraping someone else's site politely.
 
 Because it is slow, the job is built to never repeat work:
 
@@ -72,6 +73,17 @@ LEAGUE = "ENG-Premier League"
 #: FBref's advanced match logs start being reliable for the Premier League in
 #: 2017/18.
 FIRST_SEASON_START_YEAR = 2017
+
+#: The hard limit from CLAUDE.md: one request every seven seconds, no faster.
+#: soccerdata does not enforce this itself, so make_client sets it.
+REQUEST_INTERVAL_SECONDS = 7.0
+
+#: Random extra delay so requests are not perfectly periodic.
+REQUEST_JITTER_SECONDS = 2.0
+
+USER_AGENT = (
+    "premforecaster/0.1 (personal, non-commercial football forecasting project)"
+)
 
 #: The stat groups we pull. Each one is a separate request per season, so this
 #: list is deliberately short: what the model needs, nothing else.
@@ -165,7 +177,7 @@ def make_client(
         )
 
     logger.debug("Using browser at %s", browser_path)
-    return soccerdata.FBref(
+    client = soccerdata.FBref(
         leagues=LEAGUE,
         # The four-plus-four form, never a bare year: soccerdata reads "2021" as
         # the 20/21 season rather than the year 2021 and would quietly return a
@@ -175,6 +187,37 @@ def make_client(
         path_to_browser=browser_path,
         headless=True,
     )
+
+    # soccerdata leaves these at zero, so the seven-second limit is ours to set.
+    # Unlike Understat's reader, FBref's downloads go through soccerdata's
+    # _download_and_save, which does sleep for rate_limit + max_delay - so
+    # setting the attributes is enough here. This was confirmed by reading
+    # soccerdata 1.9.1's source, not end to end, because FBref could not be
+    # reached from the machine this was written on. If you get FBref working,
+    # measure the gap between requests once and confirm it is really seven
+    # seconds; do not assume, because Understat looked fine and was not.
+    client.rate_limit = REQUEST_INTERVAL_SECONDS
+    client.max_delay = REQUEST_JITTER_SECONDS
+
+    session = getattr(client, "_session", None)
+    if session is not None and hasattr(session, "headers"):
+        try:
+            session.headers.update({"User-Agent": USER_AGENT})
+        except (AttributeError, TypeError):  # pragma: no cover - session shape varies
+            logger.debug("Could not set a User-Agent on the FBref session.")
+
+    return client
+
+
+def check_politeness(client) -> None:
+    """Refuse to scrape FBref faster than one request every seven seconds."""
+    rate = getattr(client, "rate_limit", 0)
+    if not rate or rate < REQUEST_INTERVAL_SECONDS:
+        raise RuntimeError(
+            f"FBref client is set to {rate}s between requests, below the "
+            f"{REQUEST_INTERVAL_SECONDS}s hard limit in CLAUDE.md. Refusing to "
+            "scrape. soccerdata may have renamed the attribute."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +325,7 @@ def fetch_stat_group(
 ) -> pd.DataFrame:
     """Fetch and stage one (table, season, stat group). One or more requests."""
     client = make_client(start_year, cache_dir=cache_dir, browser=browser)
+    check_politeness(client)
 
     try:
         if table == "team_match":

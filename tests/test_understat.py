@@ -96,6 +96,139 @@ def test_the_right_season_passes_the_check():
 
 
 # ---------------------------------------------------------------------------
+# Scraping politeness (CLAUDE.md calls these non-negotiable)
+# ---------------------------------------------------------------------------
+
+
+class FakeClient:
+    """Stands in for a soccerdata reader, with the attributes its loop reads."""
+
+    def __init__(self, rate_limit=0, max_delay=0):
+        self.rate_limit = rate_limit
+        self.max_delay = max_delay
+
+
+def test_the_understat_interval_is_at_least_six_seconds():
+    assert us.REQUEST_INTERVAL_SECONDS >= 6.0
+
+
+def test_requests_have_jitter_so_they_are_not_perfectly_periodic():
+    assert us.REQUEST_JITTER_SECONDS > 0
+
+
+def test_the_user_agent_says_who_we_are():
+    assert "premforecaster" in us.USER_AGENT.lower()
+    assert "non-commercial" in us.USER_AGENT.lower()
+
+
+def test_an_unthrottled_client_is_refused():
+    """soccerdata ships Understat with rate_limit = 0, which we must not accept."""
+    with pytest.raises(RuntimeError, match="Refusing to scrape"):
+        us.check_politeness(FakeClient(rate_limit=0))
+
+
+def test_a_too_fast_client_is_refused():
+    with pytest.raises(RuntimeError, match="below the"):
+        us.check_politeness(FakeClient(rate_limit=1.0))
+
+
+def test_a_properly_throttled_client_is_accepted():
+    client = FakeClient(rate_limit=us.REQUEST_INTERVAL_SECONDS)
+    client._session = SpySession()
+    us.throttle(client, rate_limit=us.REQUEST_INTERVAL_SECONDS, jitter=0.0)
+    us.check_politeness(client)  # must not raise
+
+
+def test_a_client_without_a_throttle_is_refused():
+    """Setting rate_limit alone is not enough, and must not look like enough.
+
+    Understat's reader fetches through its own method that never consults
+    rate_limit, so a client with the attribute set but no throttle installed
+    would still hammer the site.
+    """
+    client = FakeClient(rate_limit=us.REQUEST_INTERVAL_SECONDS)
+    with pytest.raises(RuntimeError, match="no throttle"):
+        us.check_politeness(client)
+
+
+class SpySession:
+    """Records when requests happen, so we can measure the gaps between them."""
+
+    def __init__(self):
+        self.calls: list[float] = []
+        self.headers: dict[str, str] = {}
+
+    def get(self, *args, **kwargs):
+        import time
+
+        self.calls.append(time.monotonic())
+        return "response"
+
+
+def test_the_throttle_actually_delays_real_requests():
+    """Measured, not assumed - this is the check that caught the real bug."""
+    import time
+
+    client = FakeClient()
+    client._session = SpySession()
+    client.no_cache = False
+
+    us.throttle(client, rate_limit=0.25, jitter=0.0)
+
+    started = time.monotonic()
+    for _ in range(3):
+        client._session.get("https://understat.com/anything")
+    elapsed = time.monotonic() - started
+
+    gaps = [b - a for a, b in zip(client._session.calls, client._session.calls[1:])]
+    assert all(gap >= 0.25 for gap in gaps), gaps
+    assert elapsed >= 0.5
+
+
+def test_the_throttle_covers_every_request_not_just_the_data_ones():
+    """Understat primes cookies with a separate call that must also be throttled."""
+    client = FakeClient()
+    client._session = SpySession()
+    us.throttle(client, rate_limit=0.2, jitter=0.0)
+
+    # Whatever calls the session - cookie priming included - is delayed.
+    client._session.get("https://understat.com/")
+    client._session.get("https://understat.com/main/getPlayersStats/")
+    gaps = [b - a for a, b in zip(client._session.calls, client._session.calls[1:])]
+    assert all(gap >= 0.2 for gap in gaps), gaps
+
+
+def test_make_client_throttles_and_requests_the_right_season(monkeypatch):
+    """The whole point: soccerdata's defaults must be overridden, not trusted."""
+    created = FakeClient()
+    created._session = SpySession()
+    created.no_cache = False
+
+    class FakeUnderstatModule:
+        UNDERSTAT_HEADERS: dict[str, str] = {}
+
+    class FakeModule:
+        understat = FakeUnderstatModule
+
+        @staticmethod
+        def Understat(**kwargs):
+            created.kwargs = kwargs
+            return created
+
+    monkeypatch.setitem(__import__("sys").modules, "soccerdata", FakeModule)
+
+    client = us.make_client(2024, cache_dir="/tmp/premforecaster-test-cache")
+    assert client.rate_limit >= 6.0
+    assert client.max_delay > 0
+    assert client._premforecaster_throttled
+    us.check_politeness(client)  # must not raise
+
+    assert "premforecaster" in FakeUnderstatModule.UNDERSTAT_HEADERS["User-Agent"].lower()
+    # And the season must still be requested unambiguously.
+    assert created.kwargs["seasons"] == "2024-2025"
+
+
+# ---------------------------------------------------------------------------
 # Team match stats
 # ---------------------------------------------------------------------------
 
