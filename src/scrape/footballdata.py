@@ -114,6 +114,21 @@ REQUIRED_RAW_COLUMNS = (
     "FTR",
 )
 
+#: Match statistics we carry through to results.parquet, as
+#: ``{raw column: tidy column}``. These are the disciplinary numbers the referee
+#: profiles are built from - a referee's card rate is the whole point of that
+#: table - plus fouls, which is the behaviour underneath the cards. They are
+#: present in every season from 2014/15 onward, but are treated as optional so a
+#: season that lacks them yields blanks rather than failing the whole build.
+OPTIONAL_STAT_COLUMNS = {
+    "HY": "home_yellows",
+    "AY": "away_yellows",
+    "HR": "home_reds",
+    "AR": "away_reds",
+    "HF": "home_fouls",
+    "AF": "away_fouls",
+}
+
 RESULTS_COLUMNS = [
     "date",
     "kickoff_time_known",
@@ -124,6 +139,12 @@ RESULTS_COLUMNS = [
     "away_goals",
     "result",
     "referee",
+    "home_yellows",
+    "away_yellows",
+    "home_reds",
+    "away_reds",
+    "home_fouls",
+    "away_fouls",
     "odds_home",
     "odds_draw",
     "odds_away",
@@ -626,6 +647,21 @@ def process_season(raw: pd.DataFrame, start_year: int) -> pd.DataFrame:
             "referee": referee,
         }
     )
+
+    for raw_column, tidy_column in OPTIONAL_STAT_COLUMNS.items():
+        if raw_column in frame.columns:
+            values = pd.to_numeric(frame[raw_column], errors="coerce")
+            if (values.dropna() < 0).any():
+                raise ValueError(
+                    f"{season_label(start_year)}: {raw_column} has negative values."
+                )
+            tidy[tidy_column] = values.astype("Float64")
+        else:
+            logger.warning(
+                "%s has no %s column; %s will be blank.",
+                season_label(start_year), raw_column, tidy_column,
+            )
+            tidy[tidy_column] = pd.Series(pd.NA, index=frame.index, dtype="Float64")
 
     same_team = tidy["home_team"] == tidy["away_team"]
     if same_team.any():
