@@ -183,8 +183,13 @@ def make_client(
         # the 20/21 season rather than the year 2021 and would quietly return a
         # season of the wrong data. See src/scrape/understat.py for the details.
         seasons=f"{start_year}-{start_year + 1}",
+        # These two want opposite types, which is easy to get wrong because
+        # soccerdata's signature annotates both as Path. data_dir really is used
+        # as a Path (it calls .mkdir on it), but path_to_browser is handed
+        # straight to seleniumbase, which calls .lower() on it - so a Path there
+        # raises AttributeError before a single request is made. Pass a string.
         data_dir=Path(cache_dir),
-        path_to_browser=browser_path,
+        path_to_browser=str(browser_path),
         headless=True,
     )
 

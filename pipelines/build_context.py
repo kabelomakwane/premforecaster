@@ -28,27 +28,47 @@ import pandas as pd
 
 from src.scrape import clubelo, fpl, referees, weather
 
-SOURCES = ("clubelo", "fpl", "weather", "referees")
+SOURCES = ("elo", "fpl", "weather", "referees")
 
 
-def run_clubelo(log: logging.Logger) -> str:
-    """Download Elo histories and build the lookup table.
+def run_elo(log: logging.Logger) -> str:
+    """Build Elo ratings, and cross-check them against Club Elo where possible.
 
-    Falls back to rebuilding from cached CSVs when the API cannot be reached,
-    which is the usual case on a restricted network.
+    Two steps, in this order deliberately:
+
+    1. **Always** compute ratings from results.parquet. This needs no network
+       and cannot fail for external reasons, which is why it is the default
+       source the model reads.
+    2. **Try** a handful of dated Club Elo snapshots. If they arrive they are
+       stored separately and compared with ours, so we learn whether the two
+       agree without ever depending on a slow third-party server.
     """
-    try:
-        clubelo.download_all()
-    except (clubelo.ClubEloUnavailableError, clubelo.ClubEloFormatError) as error:
-        log.warning("Club Elo download failed: %s", error)
+    from src.ratings import elo
+
+    written = elo.build_all()
+    history = pd.read_parquet(written["history"])
+    per_match = pd.read_parquet(written["match"])
+    outcome = (
+        f"internal: {len(history)} rows, {history['team'].nunique()} clubs "
+        f"(from {len(per_match)} matches)"
+    )
 
     try:
-        history = clubelo.build_elo_history()
-    except FileNotFoundError as error:
-        return f"skipped - no data ({error})"
+        clubelo.download_snapshots()
+        live = clubelo.build_history_from_snapshots()
+    except (clubelo.ClubEloUnavailableError, clubelo.ClubEloFormatError, FileNotFoundError) as error:
+        log.warning("Club Elo cross-check unavailable: %s", error)
+        return outcome + "; Club Elo cross-check unavailable"
 
-    clubelo.write_elo_history(history)
-    return f"{len(history)} rows, {history['team'].nunique()} clubs"
+    clubelo.write_elo_history(live, clubelo.CLUBELO_HISTORY_PARQUET)
+
+    comparison = elo.compare_with_clubelo(history, live)
+    summary = elo.agreement_summary(comparison)
+    if not comparison.empty:
+        log.info("Internal vs Club Elo:\n%s", comparison.to_string(index=False))
+    log.info("Agreement: %s", summary)
+
+    return outcome + f"; Club Elo cross-check: {summary}"
 
 
 def run_fpl(log: logging.Logger) -> str:
@@ -81,7 +101,7 @@ def run_referees(log: logging.Logger) -> str:
 
 
 RUNNERS = {
-    "clubelo": run_clubelo,
+    "elo": run_elo,
     "fpl": run_fpl,
     "weather": run_weather,
     "referees": run_referees,

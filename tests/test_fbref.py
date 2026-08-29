@@ -9,6 +9,7 @@ that an unavailable FBref produces a clear, catchable error rather than a crash.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -197,6 +198,36 @@ def test_no_browser_gives_an_explanatory_error(monkeypatch):
     monkeypatch.setattr(fb, "find_browser", lambda explicit=None: None)
     with pytest.raises(fb.FBrefUnavailableError, match="Cloudflare"):
         fb.make_client(2024)
+
+
+def test_the_browser_path_is_passed_as_a_string_not_a_path(monkeypatch, tmp_path):
+    """Regression test: seleniumbase calls .lower() on the browser path.
+
+    Passing a Path raised AttributeError inside seleniumbase before a single
+    request was made, which made FBref look blocked when the probe had simply
+    crashed on the way out. soccerdata's signature annotates it as Path, which
+    is what made this easy to get wrong - and data_dir next to it really does
+    want a Path, so the two differ.
+    """
+    captured = {}
+
+    class FakeModule:
+        @staticmethod
+        def FBref(**kwargs):
+            captured.update(kwargs)
+            return type("C", (), {"rate_limit": 0.0, "max_delay": 0.0, "_session": None})()
+
+    monkeypatch.setitem(__import__("sys").modules, "soccerdata", FakeModule)
+    monkeypatch.setattr(fb, "find_browser", lambda explicit=None: tmp_path / "chrome")
+
+    fb.make_client(2024, cache_dir=tmp_path)
+
+    assert isinstance(captured["path_to_browser"], str), (
+        "seleniumbase calls .lower() on this, so it must not be a Path"
+    )
+    assert captured["path_to_browser"].lower().endswith("chrome")
+    # The neighbouring argument genuinely does need a Path - it calls .mkdir().
+    assert isinstance(captured["data_dir"], Path)
 
 
 def test_find_browser_honours_an_explicit_path(tmp_path):

@@ -92,9 +92,14 @@ python -m pipelines.build_context                # Elo, FPL, weather, referees
 python -m pipelines.build_context --only fpl     # just the availability snapshot
 ```
 
-Writes `elo_history.parquet`, `fpl_players.parquet`, `fpl_fixtures.parquet`,
-`match_weather.parquet` and `referee_profiles.parquet`. Sources are independent,
-so one being unreachable does not stop the others.
+Writes `elo_history.parquet`, `match_elo.parquet`, `fpl_players.parquet`,
+`fpl_fixtures.parquet`, `match_weather.parquet` and `referee_profiles.parquet`.
+Sources are independent, so one being unreachable does not stop the others.
+
+**Elo comes from our own results by default.** `src/ratings/elo.py` computes it
+from `results.parquet`, so it needs no network and always exists; `get_elo()`
+reads it. A live Club Elo pull is attempted as a *cross-check* and written
+separately. `data/lookups/NOTES.md` records which is primary.
 
 **Run the FPL step often.** It snapshots who is injured or doubtful *right now*,
 and that is the only way the history is ever recorded — the API cannot tell you
@@ -123,7 +128,9 @@ than 4,570, and reruns are served from cache.
 - ✅ football-data.co.uk results and closing odds → `results.parquet`
 - ✅ Understat xG (team, player, shot level) + reconciliation report
 - ✅ FPL availability snapshots, match weather (100% of matches), referee profiles
-- ⚠️ FBref and Club Elo scrapers written and tested, but both blocked by the
-  network in the environment they were built in — see `data/lookups/NOTES.md`
-  for what to run to verify them
+- ✅ Elo ratings computed from our own results (the default the model reads)
+- ⚠️ FBref reachability still untested — the first CI probe crashed before making
+  a request; the bug is fixed but the probe has not been re-run
+- ⚠️ Club Elo is slow rather than blocked; the client now waits 180s and fetches
+  whole-table snapshots. See `data/lookups/NOTES.md`
 - ⬜ Dixon-Coles model, goalscorer model, back-test, Google Sheets export

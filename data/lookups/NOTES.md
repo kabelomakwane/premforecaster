@@ -13,7 +13,7 @@ horizon). That is 36 clubs.
 |---|---|
 | `fpl_name` | **Verified** for the 20 current clubs against the live FPL API (`fantasy.premierleague.com/api/bootstrap-static/`, fetched 2026-08-29). Historic clubs are from memory — see below. |
 | `clubelo_name` | **Verified** for 17 clubs against the live Club Elo site (`clubelo.com/ENG`, English level 1). The rest are from memory. |
-| `fbref_name` | **Still not verified.** FBref is behind Cloudflare and could not be reached to check (see below), so this column remains from memory. Confirm on the first successful FBref pull — the scraper raises on any unmapped name, so it will tell you. |
+| `fbref_name` | **Still not verified.** The first Actions probe crashed before making a request (a `PosixPath` passed where seleniumbase wanted a string; fixed 2026-08-29), so FBref reachability is still untested from anywhere. Confirm on the first successful pull — the probe lists any name that does not match. |
 | `understat_name` | **Verified** for 2014/15–2026/27 on 2026-08-29 via the first full `soccerdata` pull. All 13 seasons map with nothing unmapped and nothing spare, which confirms the short forms (`Leicester`, `Ipswich`, `Brighton`, `Hull`) and the long ones (`Wolverhampton Wanderers`, `Nottingham Forest`, `Queens Park Rangers`). |
 | `footballdata_name` | **Verified** against all 13 season CSVs (2014/15–2026/27) on 2026-08-29. Every `HomeTeam`/`AwayTeam` value in every file maps to a canonical name, and every name in this column is actually used. Nothing missing, nothing spare. |
 
@@ -53,40 +53,45 @@ Spurs, Sunderland.
    **Hill Dickinson Stadium** at Bramley-Moore Dock. The coordinates in
    `stadiums.csv` (53.3906, -3.0023) are approximate and should be checked.
 
-## Club Elo could not be reached (2026-08-29)
+## Elo: which source the model uses (updated 2026-08-29)
 
-`api.clubelo.com` was unreachable from the automated environment, in two
-separate sessions and by three routes: `curl` over HTTP and HTTPS, and Python
-`requests` (read timeout on port 80, connection reset on 443). Like FBref, this
-looks like a network restriction rather than the site being down — it serves
-plain CSV and needs no key.
+**Primary source: `internal`.** `data/processed/elo_history.parquet` is computed
+from our own `results.parquet` by `src/ratings/elo.py`. It needs no network, so
+it always exists and cannot be broken by a third party. `get_elo()` reads it by
+default. **If you want the model to consume live Club Elo instead, change this
+line** — the pipeline writes the live pull to a separate file and never
+overwrites the primary one.
 
-So `elo_history.parquet` has **not** been built, and `clubelo_name` in
-team_names.csv stays partly unverified: 17 of the 36 clubs were confirmed
-against clubelo.com/ENG earlier, and the rest are from memory. The scraper
-raises `UnknownTeamError` on any name it cannot map, so a bad one will announce
-itself on the first successful run.
+**Cross-check: `clubelo`.** When the live pull succeeds it is written to
+`data/processed/elo_history_clubelo.parquet` and compared against ours; the
+agreement (rank correlation, mean rank difference) is printed by
+`python -m pipelines.build_context --only elo`.
 
-`src/scrape/clubelo.py` is written offline-first for this reason: every parsing
-and lookup function works on data already on disk and is tested with no network
-at all. Only `fetch_club_history` touches the internet, and `build_elo_history`
-rebuilds the parquet from cached CSVs without a single request. **The download
-path itself is the one part not verified against the live API.**
+### Club Elo was never blocked — it is just very slow
 
-To verify from your machine:
+An earlier note here said the API was unreachable. That was wrong, and the
+mistake is worth recording. api.clubelo.com **does** answer; it is simply slow
+enough that a 30-second read timeout expired first, and every route we tried
+used that same 30-second default. So three separate "the network is blocking
+it" conclusions were all really one bug in our own client.
 
-```bash
-python -m pipelines.build_context --only clubelo
-python -c "from src.scrape.clubelo import get_elo; print(get_elo('Arsenal', '2023-01-01'))"
-```
+Fixed: the read timeout is now 180 seconds with two retries and backoff. The
+client also prefers `api.clubelo.com/YYYY-MM-DD`, which returns the **entire
+league table in one response**, so a full refresh is about 14 requests instead
+of 36 — on a slow server that is the difference between seconds and hours.
 
-A Premier League club should come back somewhere between about 1300 and 2100;
-Arsenal in January 2023, top of the league, should be near the upper end.
+Even at 180 seconds it still times out from the sandbox this was built in, so
+that environment may genuinely be restricted as well as the server being slow.
+It is expected to work from a normal network.
 
-## FBref could not be reached (2026-08-29)
+**`clubelo_name` is still unverified for 19 of 36 clubs.** One successful
+snapshot settles the whole column at once, because the dated table contains
+every club — that is what the `check-sources` workflow now probes.
 
-FBref sits behind Cloudflare. From the automated environment this project was
-built in, every route was blocked:
+## FBref: reachability still untested (updated 2026-08-29)
+
+FBref sits behind Cloudflare. From the sandbox this project was built in, every
+route was blocked:
 
 - a plain HTTPS request returns a Cloudflare `403` challenge page;
 - so does a request with a spoofed TLS fingerprint (the trick `soccerdata` uses
@@ -94,8 +99,16 @@ built in, every route was blocked:
 - the real-browser fallback `soccerdata` falls back to had its connections cut
   by the network before any page loaded.
 
-This looks like an environment restriction rather than anything wrong with the
-scraper, which is written, tested and cache-first. On a normal machine with
+**The first GitHub Actions probe did not settle this.** It crashed with
+`AttributeError: 'PosixPath' object has no attribute 'lower'` before making a
+request: `soccerdata` annotates `path_to_browser` as a `Path`, but hands it
+straight to seleniumbase, which calls `.lower()` on it. Fixed by passing a
+string; the neighbouring `data_dir` argument genuinely does want a `Path`, which
+is what made it easy to get wrong. A regression test now pins the types. So
+FBref has still never been tried properly from a permissive network.
+
+Otherwise this looks like an environment restriction rather than anything wrong
+with the scraper, which is written, tested and cache-first. On a normal machine with
 Chrome or Chromium installed it should work; if it does not, point
 `PREMFORECASTER_BROWSER` at the browser binary. Understat supplies the xG the
 model actually depends on, so the pipeline is built to carry on without FBref.

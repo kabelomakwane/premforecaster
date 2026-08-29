@@ -31,7 +31,7 @@ import logging
 import os
 import sys
 import traceback
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -70,29 +70,37 @@ def _exception_detail(error: BaseException) -> str:
 
 
 def check_clubelo(output_dir: Path, club: str = PROBE_CLUB) -> dict[str, Any]:
-    """One request: fetch a single club's rating history and use it.
+    """One request: fetch the whole league table for a single date.
 
-    Beyond "did it connect", this runs the whole path the pipeline depends on -
-    parse the CSV, map the club name through the lookup, and answer a
-    get_elo query - so a pass here means the module genuinely works, not just
-    that the host was up.
+    The dated endpoint returns every club in Europe in one response, so this
+    both costs less than a per-club call and checks far more: how many of our 36
+    clubs Club Elo's spellings actually match. That is the part of
+    `clubelo_name` in team_names.csv that could never be verified offline.
+
+    The request is given the module's full patience - a long read timeout and
+    retries - because api.clubelo.com is slow rather than down, and a short
+    timeout is what made it look blocked in the first place.
     """
     from src.scrape import clubelo
 
+    day = date.today() - timedelta(days=1)
+
     try:
-        csv_text = clubelo.fetch_club_history(club)
+        csv_text = clubelo.fetch_table_on(day)
     except Exception as error:
         return _result(
             "clubelo", FAIL,
-            f"Could not fetch {club} from api.clubelo.com. {_exception_detail(error)}",
-            requests_made=1,
+            f"Could not fetch the table for {day} from api.clubelo.com. "
+            f"{_exception_detail(error)}",
+            requests_made=1 + clubelo.DOWNLOAD_RETRIES,
+            read_timeout_seconds=clubelo.READ_TIMEOUT_SECONDS,
         )
 
-    raw_file = output_dir / f"clubelo_{club}.csv"
+    raw_file = output_dir / f"clubelo_table_{day.isoformat()}.csv"
     raw_file.write_text(csv_text, encoding="utf-8")
 
     try:
-        history = clubelo.parse_club_history(csv_text)
+        table = clubelo.parse_table(csv_text, day)
     except Exception as error:
         return _result(
             "clubelo", FAIL,
@@ -101,38 +109,46 @@ def check_clubelo(output_dir: Path, club: str = PROBE_CLUB) -> dict[str, Any]:
             requests_made=1, artifact=raw_file.name,
         )
 
-    rating = clubelo.get_elo(club, PROBE_ELO_DATE, history)
-    history.to_csv(output_dir / f"clubelo_{club}_parsed.csv", index=False)
+    table.to_csv(output_dir / "clubelo_table_parsed.csv", index=False)
 
-    span = (
-        f"{history['valid_from'].min().date()} to {history['valid_to'].max().date()}"
-    )
-    fetched = f"Fetched {len(history)} rating periods for {club} ({span})."
-    lookup = f"get_elo({club!r}, {PROBE_ELO_DATE!r}) = " + (
-        "None" if rating is None else f"{rating:.1f}"
-    )
+    expected = set(clubelo.clubelo_names())
+    seen = set(table["clubelo_name"])
+    unmatched = sorted(expected - seen)
 
-    if rating is None:
+    rating = table.loc[table["clubelo_name"] == club, "elo"]
+    value = float(rating.iloc[0]) if not rating.empty else None
+
+    found = (
+        f"Fetched the whole table for {day} in one request: "
+        f"{len(table)} of our {len(expected)} clubs matched."
+    )
+    if value is not None:
+        found += f" {club} is rated {value:.1f}."
+
+    if unmatched:
         return _result(
             "clubelo", FAIL,
-            f"{fetched} {lookup} - the download worked but the lookup found no "
-            "rating for that date, which suggests a parsing problem.",
-            requests_made=1, artifact=raw_file.name,
+            f"{found} Club Elo has no row for: {unmatched}. Some may simply be "
+            "outside its covered leagues right now; any that are in the Premier "
+            "League need clubelo_name correcting in team_names.csv.",
+            requests_made=1, artifact=raw_file.name, unmatched=unmatched,
+            clubs_matched=len(table),
         )
 
     low, high = PLAUSIBLE_ELO
-    if not low <= rating <= high:
+    if value is not None and not low <= value <= high:
         return _result(
             "clubelo", FAIL,
-            f"{fetched} {lookup}, which is outside the plausible range "
-            f"{low}-{high} for a Premier League club.",
-            requests_made=1, artifact=raw_file.name, elo=round(float(rating), 1),
+            f"{found} That is outside the plausible range {low}-{high}.",
+            requests_made=1, artifact=raw_file.name, elo=round(value, 1),
         )
 
     return _result(
-        "clubelo", PASS, f"{fetched} {lookup}, which is plausible.",
-        requests_made=1, artifact=raw_file.name, elo=round(float(rating), 1),
-        canonical_name=str(history["team"].iloc[0]),
+        "clubelo", PASS,
+        f"{found} Every clubelo_name in the lookup matched, so that column is "
+        "verified.",
+        requests_made=1, artifact=raw_file.name, clubs_matched=len(table),
+        elo=None if value is None else round(value, 1),
     )
 
 

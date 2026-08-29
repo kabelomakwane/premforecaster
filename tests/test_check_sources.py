@@ -18,10 +18,25 @@ from pipelines import check_sources as cs
 from src.scrape import clubelo, fbref
 
 
-ARSENAL_CSV = """Rank,Club,Country,Level,Elo,From,To
-1,Arsenal,ENG,1,1834.5,2022-12-27,2023-01-02
-1,Arsenal,ENG,1,1852.1,2023-01-03,2023-01-14
-"""
+def full_table(**overrides) -> str:
+    """Every club we track, in the shape the dated endpoint returns.
+
+    The probe now asks for one date rather than one club, so a stub has to
+    contain the whole lookup - which is exactly what lets the probe verify the
+    clubelo_name column.
+    """
+    from src.scrape.clubelo import clubelo_names
+
+    ratings = {name: 1500.0 for name in clubelo_names()}
+    ratings["Arsenal"] = 1834.5
+    ratings.update(overrides)
+
+    rows = ["Rank,Club,Country,Level,Elo,From,To"]
+    for rank, (club, elo) in enumerate(sorted(ratings.items()), start=1):
+        rows.append(f"{rank},{club},ENG,1,{elo},2026-08-20,2026-09-01")
+    # A club outside our lookup, as the real response is full of.
+    rows.append("999,Real Madrid,ESP,1,1975.0,2026-08-20,2026-09-01")
+    return "\n".join(rows) + "\n"
 
 
 def schedule_frame(home: list[str], away: list[str]) -> pd.DataFrame:
@@ -45,28 +60,31 @@ class FakeFBrefClient:
 
 def test_clubelo_passes_when_the_api_answers(tmp_path, monkeypatch):
     """The path a working network takes - never exercisable where it was written."""
-    monkeypatch.setattr(clubelo, "fetch_club_history", lambda club, **kw: ARSENAL_CSV)
+    monkeypatch.setattr(clubelo, "fetch_table_on", lambda day, **kw: full_table())
 
     result = cs.check_clubelo(tmp_path)
 
     assert result["status"] == cs.PASS
     assert result["elo"] == pytest.approx(1834.5)
-    assert result["canonical_name"] == "Arsenal"
-    assert "plausible" in result["detail"]
+    # A pass means every clubelo_name in the lookup was found in the table,
+    # which is what verifies that column.
+    assert result["clubs_matched"] == 36
+    assert "verified" in result["detail"]
 
 
 def test_a_passing_clubelo_probe_saves_the_raw_download(tmp_path, monkeypatch):
-    monkeypatch.setattr(clubelo, "fetch_club_history", lambda club, **kw: ARSENAL_CSV)
+    monkeypatch.setattr(clubelo, "fetch_table_on", lambda day, **kw: full_table())
     cs.check_clubelo(tmp_path)
-    assert (tmp_path / "clubelo_Arsenal.csv").read_text() == ARSENAL_CSV
-    assert (tmp_path / "clubelo_Arsenal_parsed.csv").exists()
+    saved = list(tmp_path.glob("clubelo_table_*.csv"))
+    assert saved, "the raw download should be kept as an artifact"
+    assert (tmp_path / "clubelo_table_parsed.csv").exists()
 
 
 def test_clubelo_fails_when_it_cannot_connect(tmp_path, monkeypatch):
-    def blocked(club, **kwargs):
+    def blocked(day, **kwargs):
         raise clubelo.ClubEloUnavailableError("connection refused")
 
-    monkeypatch.setattr(clubelo, "fetch_club_history", blocked)
+    monkeypatch.setattr(clubelo, "fetch_table_on", blocked)
 
     result = cs.check_clubelo(tmp_path)
     assert result["status"] == cs.FAIL
@@ -75,7 +93,7 @@ def test_clubelo_fails_when_it_cannot_connect(tmp_path, monkeypatch):
 
 def test_clubelo_fails_when_the_response_will_not_parse(tmp_path, monkeypatch):
     """Reached the host but got something unexpected - a different problem."""
-    monkeypatch.setattr(clubelo, "fetch_club_history", lambda club, **kw: "Elo\nnonsense\n")
+    monkeypatch.setattr(clubelo, "fetch_table_on", lambda day, **kw: "Elo\nnonsense\n")
 
     result = cs.check_clubelo(tmp_path)
     assert result["status"] == cs.FAIL
@@ -85,7 +103,7 @@ def test_clubelo_fails_when_the_response_will_not_parse(tmp_path, monkeypatch):
 def test_clubelo_fails_on_an_implausible_rating(tmp_path, monkeypatch):
     """A number in the wrong units would otherwise look like a pass."""
     monkeypatch.setattr(
-        clubelo, "fetch_club_history", lambda club, **kw: ARSENAL_CSV.replace("1834.5", "12.3")
+        clubelo, "fetch_table_on", lambda day, **kw: full_table(Arsenal=12.3)
     )
     result = cs.check_clubelo(tmp_path)
     assert result["status"] == cs.FAIL
@@ -95,13 +113,13 @@ def test_clubelo_fails_on_an_implausible_rating(tmp_path, monkeypatch):
 def test_the_clubelo_probe_makes_exactly_one_request(tmp_path, monkeypatch):
     calls = []
 
-    def counted(club, **kwargs):
-        calls.append(club)
-        return ARSENAL_CSV
+    def counted(day, **kwargs):
+        calls.append(day)
+        return full_table()
 
-    monkeypatch.setattr(clubelo, "fetch_club_history", counted)
+    monkeypatch.setattr(clubelo, "fetch_table_on", counted)
     cs.check_clubelo(tmp_path)
-    assert calls == ["Arsenal"]
+    assert len(calls) == 1, "one dated request covers every club"
 
 
 # ---------------------------------------------------------------------------
@@ -266,10 +284,10 @@ def test_an_all_clear_summary_reads_as_such():
 
 def test_main_writes_the_artifacts_and_succeeds_even_when_blocked(tmp_path, monkeypatch):
     """A blocked source is the finding, not a broken job - so exit 0."""
-    def blocked(club, **kwargs):
+    def blocked(day, **kwargs):
         raise clubelo.ClubEloUnavailableError("refused")
 
-    monkeypatch.setattr(clubelo, "fetch_club_history", blocked)
+    monkeypatch.setattr(clubelo, "fetch_table_on", blocked)
 
     code = cs.main(["--output-dir", str(tmp_path), "--only", "clubelo"])
 
@@ -280,24 +298,24 @@ def test_main_writes_the_artifacts_and_succeeds_even_when_blocked(tmp_path, monk
 
 
 def test_fail_on_blocked_makes_it_exit_non_zero(tmp_path, monkeypatch):
-    def blocked(club, **kwargs):
+    def blocked(day, **kwargs):
         raise clubelo.ClubEloUnavailableError("refused")
 
-    monkeypatch.setattr(clubelo, "fetch_club_history", blocked)
+    monkeypatch.setattr(clubelo, "fetch_table_on", blocked)
 
     code = cs.main(["--output-dir", str(tmp_path), "--only", "clubelo", "--fail-on-blocked"])
     assert code == 1
 
 
 def test_main_succeeds_when_a_source_works(tmp_path, monkeypatch):
-    monkeypatch.setattr(clubelo, "fetch_club_history", lambda club, **kw: ARSENAL_CSV)
+    monkeypatch.setattr(clubelo, "fetch_table_on", lambda day, **kw: full_table())
     code = cs.main(["--output-dir", str(tmp_path), "--only", "clubelo", "--fail-on-blocked"])
     assert code == 0
 
 
 def test_the_summary_is_appended_to_the_github_job_page(tmp_path, monkeypatch):
     """This is how the PASS/FAIL actually reaches the person who triggered it."""
-    monkeypatch.setattr(clubelo, "fetch_club_history", lambda club, **kw: ARSENAL_CSV)
+    monkeypatch.setattr(clubelo, "fetch_table_on", lambda day, **kw: full_table())
     summary_file = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
 
