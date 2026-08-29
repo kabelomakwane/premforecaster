@@ -222,12 +222,27 @@ def test_goals_are_a_believable_share_of_shots(shots):
     assert 0.05 < shots["is_goal"].mean() < 0.20
 
 
-def test_penalties_have_high_xg(shots):
-    """A penalty converts about 76% of the time, so its xG must reflect that."""
-    penalties = shots[shots["situation"].str.lower().str.contains("penalty", na=False)]
-    if penalties.empty:
-        pytest.skip("no penalties in the shot data")
-    assert penalties["xg"].mean() > 0.7
+def test_penalties_are_labelled(shots):
+    """soccerdata drops Understat's Penalty label; we restore it. Check it stuck."""
+    assert shots["is_penalty"].any(), "no penalties found - the label was lost again"
+    assert not shots["situation"].isna().any(), "some shots still have no situation"
+
+
+def test_penalties_have_high_xg_and_convert_often(shots):
+    """A penalty is worth about 0.76 xG and goes in a bit under 80% of the time."""
+    penalties = shots[shots["is_penalty"]]
+    assert penalties["xg"].mean() == pytest.approx(0.76, abs=0.05)
+    assert 0.70 < penalties["is_goal"].mean() < 0.90
+
+
+def test_penalties_are_a_small_share_of_shots(shots):
+    """Roughly one shot in a hundred is a penalty."""
+    assert 0.003 < shots["is_penalty"].mean() < 0.03
+
+
+def test_open_play_shots_are_worth_far_less_than_penalties(shots):
+    open_play = shots[shots["situation"] == "Open Play"]
+    assert open_play["xg"].mean() < 0.2
 
 
 def test_shots_per_match_are_sane(shots):

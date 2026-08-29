@@ -355,6 +355,70 @@ def test_shot_events_flag_goals():
 
 
 # ---------------------------------------------------------------------------
+# Penalties
+# ---------------------------------------------------------------------------
+
+
+def shots_frame(rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    frame["is_goal"] = frame["result"].str.lower().eq("goal")
+    return frame
+
+
+def test_blank_situations_are_relabelled_as_penalties():
+    """soccerdata has no mapping for Understat's Penalty, so it arrives blank.
+
+    Losing that label would hide the most predictable shot in football from the
+    goalscorer model.
+    """
+    shots = shots_frame(
+        [
+            {"situation": "Open Play", "xg": 0.09, "result": "MissedShots"},
+            {"situation": None, "xg": 0.76, "result": "Goal"},
+            {"situation": None, "xg": 0.78, "result": "Goal"},
+        ]
+    )
+    restored = us.restore_penalty_situations(shots, 2024)
+    assert list(restored["situation"]) == ["Open Play", "Penalty", "Penalty"]
+
+
+def test_parse_shot_events_sets_an_is_penalty_flag():
+    raw = pd.DataFrame(
+        [{
+            "league_id": 1, "season_id": 1, "game_id": "26100",
+            "date": "2024-08-16 20:00:00", "shot_id": "1", "team_id": 1,
+            "player_id": "1", "assist_player_id": None, "assist_player": None,
+            "xg": 0.7602, "location_x": 0.88, "location_y": 0.5, "minute": 37,
+            "body_part": "RightFoot", "situation": None, "result": "Goal",
+        }]
+    )
+    raw.index = pd.MultiIndex.from_arrays(
+        [["ENG-Premier League"], ["2425"], ["26100"], ["Manchester City"], ["Erling Haaland"]],
+        names=["league", "season", "game", "team", "player"],
+    )
+    tidy = us.parse_shot_events(raw, 2024)
+    assert bool(tidy.loc[0, "is_penalty"])
+    assert tidy.loc[0, "situation"] == "Penalty"
+
+
+def test_ordinary_shots_are_never_relabelled_as_penalties():
+    """If soccerdata stops mapping some other situation, we must not invent one."""
+    shots = shots_frame(
+        [
+            {"situation": None, "xg": 0.04, "result": "MissedShots"},
+            {"situation": None, "xg": 0.07, "result": "MissedShots"},
+        ]
+    )
+    with pytest.raises(us.UnderstatFormatError, match="outside the"):
+        us.restore_penalty_situations(shots, 2024)
+
+
+def test_nothing_happens_when_no_situations_are_missing():
+    shots = shots_frame([{"situation": "Open Play", "xg": 0.09, "result": "Goal"}])
+    assert list(us.restore_penalty_situations(shots, 2024)["situation"]) == ["Open Play"]
+
+
+# ---------------------------------------------------------------------------
 # Resumability
 # ---------------------------------------------------------------------------
 

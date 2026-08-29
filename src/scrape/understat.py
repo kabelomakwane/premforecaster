@@ -98,6 +98,20 @@ DEFAULT_SHOT_SEASONS = 4
 #: Understat timestamps are UK local time, like football-data's.
 SOURCE_TIMEZONE = "Europe/London"
 
+#: soccerdata 1.9.1 tidies Understat's shot ``situation`` values through a lookup
+#: that has entries for OpenPlay, FromCorner, SetPiece and DirectFreekick - but
+#: **not** for Penalty, so every penalty comes back with a blank situation. That
+#: matters: penalties are the single most predictable shot in football and the
+#: goalscorer model has to treat them separately, since who takes them is a squad
+#: decision rather than a matter of form. We restore the label here.
+PENALTY_SITUATION = "Penalty"
+
+#: A penalty is converted a bit under 80% of the time, so its xG sits near 0.76.
+#: Used to check that the blanks we relabel really are penalties: if soccerdata
+#: ever fails to map a *different* situation, these bounds catch it instead of
+#: letting us mislabel ordinary shots.
+PENALTY_XG_BOUNDS = (0.70, 0.82)
+
 #: Minimum seconds between requests. CLAUDE.md sets this at six for Understat
 #: and calls it non-negotiable. soccerdata does not enforce it, so we do.
 REQUEST_INTERVAL_SECONDS = 6.0
@@ -448,7 +462,42 @@ def parse_shot_events(raw: pd.DataFrame, start_year: int) -> pd.DataFrame:
         }
     )
     tidy["is_goal"] = tidy["result"].str.lower().eq("goal")
+    tidy = restore_penalty_situations(tidy, start_year)
+    tidy["is_penalty"] = tidy["situation"].eq(PENALTY_SITUATION)
     return tidy.sort_values(["game_id", "minute"]).reset_index(drop=True)
+
+
+def restore_penalty_situations(shots: pd.DataFrame, start_year: int) -> pd.DataFrame:
+    """Put the ``Penalty`` label back on the shots soccerdata leaves blank.
+
+    See :data:`PENALTY_SITUATION`. Before relabelling anything we check the
+    blank rows really do look like penalties, by their xG: a penalty is worth
+    about 0.76 expected goals and almost nothing else in football is. If the
+    blanks look like ordinary shots we raise instead, because that would mean
+    soccerdata has stopped mapping some *other* situation and relabelling would
+    be inventing data.
+    """
+    missing = shots["situation"].isna()
+    if not missing.any():
+        return shots
+
+    mean_xg = shots.loc[missing, "xg"].mean()
+    low, high = PENALTY_XG_BOUNDS
+    if not (low <= mean_xg <= high):
+        raise UnderstatFormatError(
+            f"{season_label(start_year)}: {int(missing.sum())} shot(s) have no "
+            f"situation, and their mean xG of {mean_xg:.3f} is outside the "
+            f"{low}-{high} range expected of penalties. Refusing to guess what "
+            "they are - check what situations Understat is now returning."
+        )
+
+    shots = shots.copy()
+    shots.loc[missing, "situation"] = PENALTY_SITUATION
+    logger.info(
+        "%s: labelled %d blank shot situation(s) as penalties (mean xG %.3f).",
+        season_label(start_year), int(missing.sum()), mean_xg,
+    )
+    return shots
 
 
 # ---------------------------------------------------------------------------
